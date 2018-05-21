@@ -25,30 +25,41 @@ def add_water_mark(image_path):
 
     # サムネイルにくっつける
     thumbnail = Image.open(image_path)
-    watermark = Image.open(watermark_tmp_path).convert('RGBA')
+    watermark = Image.open(watermark_tmp_path)
+    mask = watermark.split()[3] # pngを透過させるためにマスクを指定する
 
-    thumbnail.paste(watermark, (thumbnail.width - 200, thumbnail.height - 50))
+    thumbnail.paste(watermark, (thumbnail.width - 200, thumbnail.height - 50), mask)
     upload_path = '/tmp/watered_{}.jpg'.format(uuid.uuid4())
     thumbnail.save(upload_path, quality=95)
     s3_client.upload_file(upload_path, '{}'.format(bucket_name), 'lambda_thumbnail/water_{}.jpg'.format(datetime.now().strftime("%Y%m%d%H%M%S")))
+    return upload_path
+
+def pad_white(image_path):
+    thumbnail = Image.open(image_path)
+
+    # 500*500の白い背景を作る
+    pad = Image.new('RGBA', (500, 500), (255, 255, 255, 0))
+    # ウォーターマークをつけたサムネイルを、白背景にpasteする
+    pad.paste(thumbnail, (0, int((500-thumbnail.height)/2)))
+    upload_path = '/tmp/pad_{}.jpg'.format(uuid.uuid4())
+    pad = pad.convert('RGB')
+    pad.save(upload_path, quality=95)
+    s3_client.upload_file(upload_path, '{}'.format(bucket_name), 'lambda_thumbnail/pad_{}.jpg'.format(datetime.now().strftime("%Y%m%d%H%M%S")))
 
 def lambda_handler(event, context):
     for record in event['Records']:
         object_key = record['s3']['object']['key']
-        print('bucket_name:{}'.format(bucket_name))
-        print('object_key:{}'.format(object_key))
 
         download_path = '/tmp/{}.jpg'.format(uuid.uuid4()) #ダウンロードしたファイルをおくパス(lambda側のパス) ファイル名をuuidにする
-        print('downlaod_path:{}'.format(download_path))
         upload_path = '/tmp/resized-{}.jpg'.format(uuid.uuid4()) #アップロードするファイルのパス(lambdaのパス) ファイル名をresized-<uuid>
-        print('upload_path:{}'.format(upload_path))
 
         #s3_client.download_file('enphoto-dev', 'original/1/1/00298f38-3ea1-4e49-bd2e-3ab8e733c28b.jpg', '/tmp/test.jpg')
         s3_client.download_file(bucket_name, object_key, download_path)
         # リサイズする
         resize_image(download_path, upload_path)
         # ウォーターマークをくっつける(s3においておく)
-        add_water_mark(upload_path)
-        # サムネイルサイズに達していない場合、周りを知ろう目にする
-        s3_client.upload_file(upload_path, '{}'.format(bucket_name), 'lambda_thumbnail/{}.jpg'.format(datetime.now().strftime("%Y%m%d%H%M%S")))
+        water_upload_path = add_water_mark(upload_path)
+        # サムネイルサイズに達していない場合、周りを白背景にする
+        pad_white(water_upload_path)
 
+        s3_client.upload_file(upload_path, '{}'.format(bucket_name), 'lambda_thumbnail/{}.jpg'.format(datetime.now().strftime("%Y%m%d%H%M%S")))
